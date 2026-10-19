@@ -4820,7 +4820,7 @@ window.checkInlineChanged = function(id) {
     const savedHbRaw = inputHb.dataset.saved || '';
 
     const currentSbRaw = inputSb.value.replace(/\D/g, '');
-    const savedSbRaw = inputSb.dataset.saved || '0';
+    const savedSbRaw = inputSb.dataset.saved ?? '';
 
     // Cek apakah ada ketikan baru yang beda dari nilai tersimpan
     const stokChanged = (currentSbRaw !== '') && (currentSbRaw !== savedSbRaw);
@@ -4882,14 +4882,25 @@ window.fokusStok = function(el) {
 window.blurStok = function(el) {
     setTimeout(() => {
         if (el.dataset.updating === 'true') return;
-        let savedVal = el.dataset.saved || '0';
-        el.value = savedVal;
+
+        const savedVal = el.dataset.saved ?? '';
+        const currentVal = el.value.replace(/\D/g, '');
+        const hasPendingChange = currentVal !== '' && currentVal !== savedVal;
+
+        // Pertahankan angka baru agar tidak hilang sebelum tombol Update diklik.
+        // Nilai 0 ditampilkan sebagai tanda — seperti kolom Harga Terbaru.
+        if (hasPendingChange) {
+            el.value = currentVal;
+        } else {
+            el.value = (savedVal !== '' && Number(savedVal) !== 0) ? savedVal : '—';
+        }
+
         el.style.borderColor = '#cbd5e1'; el.style.background = '#f8fafc';
-        
-        // Cek kembali status tombol setelah auto-revert
+
+        // Cek kembali status tombol setelah input kehilangan fokus
         const id = el.id.replace('in-sb-', '');
         window.checkInlineChanged(id);
-    }, 200); 
+    }, 200);
 };
 
 // ---------------- FUNGSI UPDATE GABUNGAN PARSIAL (OPTIMISTIC UI) ----------------
@@ -4909,7 +4920,7 @@ window.simpanInline = async function(id) {
     const stokBaruRaw = inputSb.value.replace(/\D/g, '');
     
     const savedHb = inputHb.dataset.saved || '';
-    const savedSb = inputSb.dataset.saved || '0';
+    const savedSb = inputSb.dataset.saved ?? '';
 
     const idx = S.st.data.findIndex(x => String(x['Id Produk']) === String(id));
     if (idx === -1) {
@@ -4955,7 +4966,14 @@ window.simpanInline = async function(id) {
         
         S.st.data[idx]['Stok Lama'] = valStokBaru;
         S.st.data[idx]['Stok Baru'] = valStokBaru;
-        inputSb.dataset.saved = valStokBaru;
+
+        // Perbarui kolom Stok Lama di layar saat itu juga, bukan hanya data memori.
+        const stokLamaCell = document.getElementById(`lbl-sl-${id}`);
+        if (stokLamaCell) stokLamaCell.textContent = String(valStokBaru);
+
+        // Nilai 0 tetap dikirim ke backend, sementara kolom Stok Baru menampilkan —.
+        inputSb.dataset.saved = valStokBaru === 0 ? '' : String(valStokBaru);
+        inputSb.value = valStokBaru === 0 ? '—' : String(valStokBaru);
     }
 
     if (isHargaChanged) {
@@ -5007,6 +5025,10 @@ window.simpanInline = async function(id) {
 
         toast('✨ Data berhasil diperbarui!', 'ok');
 
+        // Sinkronkan ulang tabel dan filter setelah server mengonfirmasi simpan.
+        // Ini membuat Stok Lama, Stok Baru, jumlah ringkasan, dan filter langsung konsisten.
+        if (typeof stFilter === 'function') stFilter();
+
         // Kembalikan tombol ke state normal setelah 2 detik
         setTimeout(() => {
             if (btnEl) {
@@ -5038,6 +5060,10 @@ window.simpanInline = async function(id) {
         S.st.data[idx]['Harga Jual Saat Ini'] = backupData.hargaJual;
         S.st.data[idx]['Harga Terbaru'] = backupData.hargaTerbaru;
 
+        // Kembalikan juga teks Stok Lama bila penyimpanan gagal.
+        const stokLamaCell = document.getElementById(`lbl-sl-${id}`);
+        if (stokLamaCell) stokLamaCell.textContent = String(parseInt(backupData.stokLama, 10) || 0);
+
         // Kembalikan nilai elemen UI
         inputHb.dataset.saved = backupData.savedHb;
         inputSb.dataset.saved = backupData.savedSb;
@@ -5047,7 +5073,7 @@ window.simpanInline = async function(id) {
             if (hpLabel) hpLabel.textContent = backupData.labelHpText;
         }
         if (isStokChanged) {
-            inputSb.value = backupData.savedSb;
+            inputSb.value = backupData.savedSb || '—';
         }
 
         if (typeof renderStStats === 'function') renderStStats();
@@ -5085,13 +5111,16 @@ function renderStTableBody(){
   if(!slice.length){ tb.innerHTML=''; }
   else {
     tb.innerHTML=slice.map(item=>{
-      const sOld=parseInt(item['Stok Lama'])||0, sNew=parseInt(item['Stok Baru'])||0;
+      const sOld=parseInt(item['Stok Lama'])||0;
       const id=esc(item['Id Produk']||''), nm=esc(item['Nama Produk']||''), vr=esc(item['Nama Variasi']||'');
       
       const hp=item['Harga Jual Saat Ini']||'';
       const hb=item['Harga Terbaru']||'';
 
       const displayHp = hp ? fmtRp(hp) : '—';
+      const stokBaruValue = String(item['Stok Baru'] ?? '').replace(/\D/g, '');
+      const rawSb = (stokBaruValue && Number(stokBaruValue) !== 0) ? stokBaruValue : '';
+      const displaySb = rawSb || '—';
       const rawHb = (hb && hb !== '0') ? String(hb).replace(/\D/g, '') : '';
       const displayHb = rawHb ? ('Rp ' + window.formatNominal(rawHb)) : '—';
 
@@ -5099,15 +5128,15 @@ function renderStTableBody(){
         <td data-label="ID Produk" style="font-family:var(--mono);font-size:10.5px">${id}</td>
         <td data-label="Nama Produk"><div style="font-weight:700;font-size:12.5px">${nm}</div></td>
         <td data-label="Variasi" style="font-size:11px;color:var(--t2)">${vr||'—'}</td>
-        <td data-label="Stok Lama" class="num">${sOld}</td>
+        <td id="lbl-sl-${id}" data-label="Stok Lama" class="num">${sOld}</td>
         
         <!-- INPUT STOK BARU -->
         <td data-label="Stok Baru" class="num">
           <input type="text"
                  id="in-sb-${id}"
-                 data-saved="${sNew}"
-                 value="${sNew}"
-                 placeholder="0"
+                 data-saved="${rawSb}"
+                 value="${displaySb}"
+                 placeholder="—"
                  onfocus="fokusStok(this)"
                  oninput="formatStokLive(this); checkInlineChanged('${id}')"
                  onblur="blurStok(this)"
